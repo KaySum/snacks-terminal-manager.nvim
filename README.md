@@ -13,7 +13,9 @@ The plugin ships **commands and an API only**; you decide the keymaps in your ow
   that share a `<count>`. Prefix a count to jump straight to terminal N.
 - **Picker** — a `vim.ui.select` list of live terminals showing id, custom name,
   foreground process (e.g. `nvim`, `lazygit`), and cwd, with the active one marked.
-- **Rename** — give a terminal a name that shows in the picker and winbar.
+- **Rename / Close** — name a terminal (shown in the picker and winbar) or kill
+  one. Both act on the current terminal when you're inside one, otherwise pick.
+- **Cycle** — jump to the next/previous terminal by id, wrapping around.
 - **Winbar** — `"<id>: [name] <title>"` on split terminals; floating terminals
   (like lazygit) stay bare — no reserved empty row.
 
@@ -79,6 +81,10 @@ require("snacks-terminal-manager").setup({
     input_prompt = "Terminal name: ",
   },
 
+  close = {
+    select_prompt = "Close terminal",
+  },
+
   -- User commands. `commands = false` creates none.
   commands = {
     enabled = true,
@@ -102,7 +108,9 @@ opts = { root = function() return LazyVim.root() end }
 | --- | --- |
 | `:SnacksTerminalToggle` | Focus the MRU terminal, or terminal `[count]` (e.g. `:3SnacksTerminalToggle`). Toggles closed when focused. |
 | `:SnacksTerminalPick` | Pick a terminal to focus. |
-| `:SnacksTerminalRename` | Rename a terminal. |
+| `:SnacksTerminalRename` | Rename a terminal — the current one, or pick. |
+| `:SnacksTerminalClose` | Close (kill) a terminal — the current one, or pick. |
+| `:SnacksTerminalNext` / `:SnacksTerminalPrev` | Focus the next / previous terminal (wraps). |
 
 ## API
 
@@ -112,7 +120,10 @@ local term = require("snacks-terminal-manager")
 term.toggle()   -- focus MRU terminal; toggle closed if current
 term.toggle(3)  -- focus/toggle terminal #3
 term.pick()     -- terminal picker
-term.rename()   -- rename a terminal via the picker
+term.rename()   -- rename the current terminal, or pick one
+term.close()    -- close (kill) the current terminal, or pick one
+term.next()     -- focus the next terminal (wraps)
+term.prev()     -- focus the previous terminal (wraps)
 ```
 
 ## Keymaps
@@ -149,12 +160,18 @@ and MRU tracking are live before any terminal opens:
   lazy = false,
   opts = {},
   keys = {
-    { "<c-/>", function() require("snacks-terminal-manager").toggle(vim.v.count) end, mode = { "n", "t" }, desc = "Terminal" },
-    { "<leader>tt", function() require("snacks-terminal-manager").pick() end, desc = "Switch Terminal" },
-    { "<leader>tr", function() require("snacks-terminal-manager").rename() end, desc = "Rename Terminal" },
+    -- Toggle honours v:count, so 3<C-/> focuses terminal 3 even via <cmd>.
+    { "<c-/>", "<cmd>SnacksTerminalToggle<cr>", mode = { "n", "t" }, desc = "Terminal" },
+    { "<leader>tt", "<cmd>SnacksTerminalPick<cr>", desc = "Switch Terminal" },
+    { "<leader>tr", "<cmd>SnacksTerminalRename<cr>", desc = "Rename Terminal" },
+    { "<leader>td", "<cmd>SnacksTerminalClose<cr>", desc = "Close Terminal" },
   },
 }
 ```
+
+The example above binds the commands; you can bind the API directly instead
+(`function() require("snacks-terminal-manager").toggle(vim.v.count) end`) — handy
+if you set `commands = false`.
 
 > On LazyVim this also overrides LazyVim's built-in `<C-/>` cleanly: declaring the
 > key in a lazy `keys` spec makes LazyVim's `safe_keymap_set` defer to yours.

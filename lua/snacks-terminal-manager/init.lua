@@ -37,6 +37,9 @@ M.winbar = DEFAULT_WINBAR
 ---@field select_prompt? string Prompt when choosing which terminal to rename.
 ---@field input_prompt? string Prompt for the new terminal name.
 
+---@class SnacksTerminalManager.CloseConfig
+---@field select_prompt? string Prompt when choosing which terminal to close.
+
 ---@class SnacksTerminalManager.CommandsConfig
 ---@field enabled? boolean Create user commands (default true).
 ---@field prefix? string Command name prefix (default "SnacksTerminal").
@@ -47,6 +50,7 @@ M.winbar = DEFAULT_WINBAR
 ---@field winbar? boolean|SnacksTerminalManager.WinbarConfig
 ---@field picker? SnacksTerminalManager.PickerConfig
 ---@field rename? SnacksTerminalManager.RenameConfig
+---@field close? SnacksTerminalManager.CloseConfig
 ---@field commands? boolean|SnacksTerminalManager.CommandsConfig
 
 ---@type SnacksTerminalManager.Config
@@ -71,6 +75,9 @@ local defaults = {
   rename = {
     select_prompt = "Rename terminal",
     input_prompt = "Terminal name: ",
+  },
+  close = {
+    select_prompt = "Close terminal",
   },
   commands = {
     enabled = true,
@@ -139,6 +146,25 @@ local function focus_win(win)
   end
 end
 
+-- The managed terminal for the current buffer, if we are inside one.
+local function current_terminal()
+  local buf = vim.api.nvim_get_current_buf()
+  for _, t in ipairs(Snacks.terminal.list()) do
+    if t.buf == buf then
+      return t
+    end
+  end
+end
+
+-- Live terminals sorted by id (the <count>), for stable cycling/listing.
+local function sorted_terms()
+  local terms = Snacks.terminal.list()
+  table.sort(terms, function(a, b)
+    return (term_meta(a.buf).id or 0) < (term_meta(b.buf).id or 0)
+  end)
+  return terms
+end
+
 local function process_tree()
   local ok, out = pcall(vim.fn.system, { "ps", "-Ao", "pid=,ppid=,comm=" })
   if not ok or vim.v.shell_error ~= 0 then
@@ -201,13 +227,10 @@ local function terminal_label(t, tree, mru_buf)
 end
 
 local function pick_terminal(prompt, on_choice)
-  local terms = Snacks.terminal.list()
+  local terms = sorted_terms()
   if #terms == 0 then
     return vim.notify(config.picker.empty, vim.log.levels.INFO)
   end
-  table.sort(terms, function(a, b)
-    return (term_meta(a.buf).id or 0) < (term_meta(b.buf).id or 0)
-  end)
   local tree = config.picker.process and process_tree() or nil
   local mru = mru_terminal(terms)
   local mru_buf = mru and mru.buf
@@ -247,20 +270,75 @@ function M.pick()
   end)
 end
 
---- Pick a terminal and rename it. Names show up in the picker and winbar.
-function M.rename()
-  pick_terminal(config.rename.select_prompt, function(t)
-    vim.ui.input({
-      prompt = config.rename.input_prompt,
-      default = vim.b[t.buf].terminal_name,
-      -- line up with the select picker, which centers a 0.4-high box (top ~0.3).
-      win = { row = 0.3 },
-    }, function(name)
-      if name then
-        vim.b[t.buf].terminal_name = name ~= "" and name or nil
-      end
-    end)
+local function rename_prompt(t)
+  vim.ui.input({
+    prompt = config.rename.input_prompt,
+    default = vim.b[t.buf].terminal_name,
+    -- line up with the select picker, which centers a 0.4-high box (top ~0.3).
+    win = { row = 0.3 },
+  }, function(name)
+    if name then
+      vim.b[t.buf].terminal_name = name ~= "" and name or nil
+    end
   end)
+end
+
+--- Rename a terminal (names show up in the picker and winbar). Renames the
+--- current terminal directly when invoked from inside one, otherwise picks.
+function M.rename()
+  local cur = current_terminal()
+  if cur then
+    return rename_prompt(cur)
+  end
+  pick_terminal(config.rename.select_prompt, rename_prompt)
+end
+
+-- Kill a terminal: deleting the buffer stops the job and triggers snacks'
+-- BufWipeout cleanup (removing it from the registry and closing its window).
+local function close_terminal(t)
+  if vim.api.nvim_buf_is_valid(t.buf) then
+    vim.api.nvim_buf_delete(t.buf, { force = true })
+  end
+end
+
+--- Close (kill) a terminal. Closes the current terminal directly when invoked
+--- from inside one, otherwise picks.
+function M.close()
+  local cur = current_terminal()
+  if cur then
+    return close_terminal(cur)
+  end
+  pick_terminal(config.close.select_prompt, close_terminal)
+end
+
+-- Focus the terminal `delta` steps from the current one (by id, wrapping). When
+-- not inside a terminal, jump to the first (next) or last (prev).
+local function cycle(delta)
+  local terms = sorted_terms()
+  if #terms == 0 then
+    return focus_terminal(1)
+  end
+  local cur, idx = current_terminal(), 0
+  if cur then
+    for i, t in ipairs(terms) do
+      if t.buf == cur.buf then
+        idx = i
+        break
+      end
+    end
+  end
+  local target = idx == 0 and (delta > 0 and 1 or #terms) or ((idx - 1 + delta) % #terms) + 1
+  terms[target]:show():focus()
+end
+
+--- Focus the next terminal by id (wraps around).
+function M.next()
+  cycle(1)
+end
+
+--- Focus the previous terminal by id (wraps around).
+function M.prev()
+  cycle(-1)
 end
 
 -- Terminals (including lazygit) share the "terminal" style, so its winbar would
@@ -278,8 +356,10 @@ end
 local function create_commands()
   local prefix = config.commands.prefix
 
+  -- args.count carries a count given to the command (`:3.Toggle`); fall back to
+  -- v:count so a `<cmd>.Toggle<cr>` keymap still honours a typed count (`3<C-/>`).
   vim.api.nvim_create_user_command(prefix .. "Toggle", function(args)
-    M.toggle(args.count)
+    M.toggle(args.count > 0 and args.count or vim.v.count)
   end, { count = 0, desc = "Focus the MRU terminal, or terminal [count]" })
 
   vim.api.nvim_create_user_command(prefix .. "Pick", function()
@@ -288,7 +368,19 @@ local function create_commands()
 
   vim.api.nvim_create_user_command(prefix .. "Rename", function()
     M.rename()
-  end, { desc = "Rename a terminal" })
+  end, { desc = "Rename a terminal (the current one, or pick)" })
+
+  vim.api.nvim_create_user_command(prefix .. "Close", function()
+    M.close()
+  end, { desc = "Close a terminal (the current one, or pick)" })
+
+  vim.api.nvim_create_user_command(prefix .. "Next", function()
+    M.next()
+  end, { desc = "Focus the next terminal" })
+
+  vim.api.nvim_create_user_command(prefix .. "Prev", function()
+    M.prev()
+  end, { desc = "Focus the previous terminal" })
 end
 
 -- Accept `winbar`/`commands` as booleans as well as tables.
@@ -304,7 +396,7 @@ end
 
 --- Configure the plugin. Registers MRU tracking, the winbar, and user commands.
 --- Keymaps are intentionally left to the user — bind the commands or the API
---- (`toggle`/`pick`/`rename`) in your own config.
+--- (`toggle`/`pick`/`rename`/`close`/`next`/`prev`) in your own config.
 ---@param opts? SnacksTerminalManager.Config
 function M.setup(opts)
   config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), normalize(opts))
