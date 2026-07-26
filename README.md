@@ -1,4 +1,4 @@
-# nvim-snacks-terminal-manager
+# snacks-terminal-manager.nvim
 
 Lightweight terminal management on top of [`snacks.nvim`](https://github.com/folke/snacks.nvim)'s
 terminal module. Adds MRU-aware toggling, a labelled terminal picker, per-terminal
