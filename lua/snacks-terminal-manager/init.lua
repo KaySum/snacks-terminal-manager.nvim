@@ -92,6 +92,19 @@ local function term_meta(buf)
   return vim.b[buf].snacks_terminal or {}
 end
 
+-- A managed shell terminal: no `cmd`, unlike snacks' lazygit-style terminals.
+local function is_managed(buf)
+  local meta = term_meta(buf)
+  return meta.id ~= nil and meta.cmd == nil
+end
+
+-- Live plugin-managed shell terminals (snacks' registry minus cmd terminals).
+local function list_terminals()
+  return vim.tbl_filter(function(t)
+    return is_managed(t.buf)
+  end, Snacks.terminal.list())
+end
+
 -- Opts passed to Snacks.terminal.focus. User `terminal` opts are merged in, but
 -- cwd (from `root`) and count are always managed by the plugin.
 local function terminal_opts(count)
@@ -126,7 +139,7 @@ end
 -- terminal list already in hand can pass it to avoid a second lookup.
 local function mru_terminal(terms)
   local by_buf = {}
-  for _, t in ipairs(terms or Snacks.terminal.list()) do
+  for _, t in ipairs(terms or list_terminals()) do
     by_buf[t.buf] = t
   end
   for _, buf in ipairs(mru_bufs) do
@@ -149,7 +162,7 @@ end
 -- The managed terminal for the current buffer, if we are inside one.
 local function current_terminal()
   local buf = vim.api.nvim_get_current_buf()
-  for _, t in ipairs(Snacks.terminal.list()) do
+  for _, t in ipairs(list_terminals()) do
     if t.buf == buf then
       return t
     end
@@ -158,7 +171,7 @@ end
 
 -- Live terminals sorted by id (the <count>), for stable cycling/listing.
 local function sorted_terms()
-  local terms = Snacks.terminal.list()
+  local terms = list_terminals()
   table.sort(terms, function(a, b)
     return (term_meta(a.buf).id or 0) < (term_meta(b.buf).id or 0)
   end)
@@ -413,7 +426,7 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd("BufEnter", {
     group = vim.api.nvim_create_augroup("snacks_terminal_manager_mru", { clear = true }),
     callback = function(ev)
-      if term_meta(ev.buf).id then
+      if is_managed(ev.buf) then
         remember_terminal(ev.buf)
       end
     end,
