@@ -354,16 +354,16 @@ function M.prev()
   cycle(-1)
 end
 
--- Terminals (including lazygit) share the "terminal" style, so its winbar would
--- land on floats too. A winbar that merely renders empty still reserves a row,
--- so clear the option outright for floating terminals unless winbar.floating is
--- enabled.
+-- Set the winbar here (not via the style's `wo`) so it never touches floats:
+-- setting then clearing it per show resizes the float's grid and creeps its
+-- content upward on every toggle (e.g. re-opening lazygit with <C-/>).
 ---@param self snacks.win
 function M.on_win(self)
   local floating = config and config.winbar and config.winbar.floating
-  if not floating and self:is_floating() then
-    vim.wo[self.win].winbar = ""
+  if self:is_floating() and not floating then
+    return
   end
+  vim.wo[self.win].winbar = config.winbar.format or DEFAULT_WINBAR
 end
 
 local function create_commands()
@@ -432,11 +432,10 @@ function M.setup(opts)
     end,
   })
 
-  -- Merge the winbar + float-stripping into snacks' "terminal" style. Existing
-  -- user config wins (Snacks.config.style merges our values underneath).
+  -- Hook the winbar into snacks' "terminal" style via on_win. Existing user
+  -- config wins (Snacks.config.style merges our values underneath).
   if config.winbar.enabled ~= false then
     Snacks.config.style("terminal", {
-      wo = { winbar = config.winbar.format or DEFAULT_WINBAR },
       on_win = M.on_win,
     })
   end
